@@ -60,10 +60,11 @@ public:
 
 	// Inserting Velocity
 	float velocityTimer = 0;
-	float velocityInterval = 0.512f;
+	float velocityInterval = 0.128f;
 
 	void injectVelocity();
 	void injectDensity();
+	void injectCurlVelocity();
 
 	ofParameter<int>		outputWidth;
 	ofParameter<int>		outputHeight;
