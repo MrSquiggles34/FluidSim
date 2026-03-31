@@ -1,100 +1,101 @@
 #pragma once
 
 #include "ofMain.h"
+#include "ofxFlowTools.h"
+#include "ofxGui.h"
 
-#include <Eigen/Dense>
-#include <Eigen/Sparse>
+using namespace flowTools;
+
+enum visualizationTypes { OBSTACLE, OBST_OFFSET, FLUID_BUOY, FLUID_VORT, FLUID_DIVE, FLUID_TMP, FLUID_PRS, FLUID_VEL, FLUID_DEN };
+
+const vector<string> visualizationNames({ "obstacle", "obstacle offset", "fluid buoyancy", "fluid vorticity", "fluid divergence", "fluid temperature", "fluid pressure", "fluid velocity", "fluid density" });
 
 class ofApp : public ofBaseApp {
+
 public:
 	void setup();
 	void update();
 	void draw();
 
-	// Parse arguments
-	int argc;
-	char ** argv; 
+	void keyPressed(int key);
+	void keyReleased(int key);
+	void mouseMoved(int x, int y);
+	void mouseDragged(int x, int y, int button);
+	void mousePressed(int x, int y, int button);
+	void mouseReleased(int x, int y, int button);
+	void mouseEntered(int x, int y);
+	void mouseExited(int x, int y);
+	void windowResized(int w, int h);
+	void dragEvent(ofDragInfo dragInfo);
+	void gotMessage(ofMessage msg);
 
 
-	// Rendering objects
-	ofImage sourceImage;
-	ofImage targetImage;
-	ofImage originalSource; // keep original source for gradient computation
-	ofFbo framebuffer;
+	int	densityWidth;
+	int densityHeight;
+
+	int simulationWidth;
+	int simulationHeight;
+
+	int windowWidth;
+	int windowHeight;
+
+	// Mouse controls
+	ofVec2f prevMouse;
+	ofVec2f mouseVel;
+
+	ofFbo velocityFbo;
+	ofFbo densityFbo;
 
 
-	// Image details
-	int w;
-	int h;
+	// Store fluid pipeline into flows
+	vector< ftFlow* >		flows;
+	ftFluidFlow				fluidFlow;
+
+	// For importing obstacles
+	ofImage					flowToolsLogo;
+
+	// Inserting Density
+	float pigmentTimer = 0.0f;
+	float pigmentInterval = 15.0f;   
+
+	// Inserting Velocity
+	float velocityTimer = 0;
+	float velocityInterval = 0.512f;
+
+	void injectVelocity();
+	void injectDensity();
+
+	ofParameter<int>		outputWidth;
+	ofParameter<int>		outputHeight;
+	ofParameter<int>		simulationScale;
+	ofParameter<int>		simulationFPS;
+	void simulationResolutionListener(int& _value);
+
+	ofParameterGroup		visualizationParameters;
+	ofParameter<int>		visualizationMode;
+	ofParameter<string>		visualizationName;
+	ofParameter<float>		visualizationScale;
+	ofParameter<bool>		toggleVisualizationScalar;
+	void visualizationModeListener(int& _value) { visualizationName.set(visualizationNames[_value]); }
+	void visualizationScaleListener(float& _value) { for (auto flow : flows) { flow->setVisualizationScale(_value); } }
+	void toggleVisualizationScalarListener(bool& _value) { for (auto flow : flows) { flow->setVisualizationToggleScalar(_value); } }
 
 
-	// Saving
-	void saveOutput();
+	ofxPanel			gui;
+	void				setupGui();
 
+	ofParameter<float>	guiFPS;
+	ofParameter<float>	guiMinFPS;
+	ofParameter<bool>	toggleFullScreen;
+	ofParameter<bool>	toggleGuiDraw;
+	ofParameter<bool>	toggleReset;
 
-	// Masking ----------------------------------------------
+	void				toggleFullScreenListener(bool& _value) { ofSetFullscreen(_value); }
+	void				toggleResetListener(bool& _value);
+	void 				windowResized(ofResizeEventArgs& _resize) { windowWidth = _resize.width; windowHeight = _resize.height; }
 
-	int startX;
-	int startY;
-	int endX;
-	int endY;
-
-	int pasteX;
-	int pasteY;
-
-	int mouseXPreview;
-	int mouseYPreview;
-
-	bool brushing = false;
-	int brushRadius = 40;
-
-	vector<bool> mask;
-	std::vector<bool> cloneMask;
-
-	void mousePressed(int mouseX, int mouseY, int button);
-	void mouseDragged(int mouseX, int mouseY, int button);
-	void mouseReleased(int mouseX, int mouseY, int button);
-	void mouseMoved(int mouseX, int mouseY);
-	void brushMask(int mouseX, int mouseY);
-
-
-	// Divergence computation -------------------------------
-	// Map from pixel coordinates to index in masked pixel list, -1 for non-masked pixels
-	vector<int> indexMap;
-
-	// divergence vectors for each color channel
-	vector<double> pixelsR;
-	vector<double> pixelsG;
-	vector<double> pixelsB;
-
-	void computeDivergenceSeamless(ofImage & targetImage, ofImage & sourceImage);
-
-
-	// Poisson Equation -------------------------------------
-	typedef Eigen::Triplet<double> T;
-	// Build the sparse matrix A 
-	std::vector<T> triplets;
-	Eigen::SparseMatrix<double> A; 
-
-	// Right hand side vectors for each color channel
-	Eigen::VectorXd bR; 
-	Eigen::VectorXd bG;
-	Eigen::VectorXd bB;
-	
-
-	void solvePoissonSeamless(ofImage & targetImage);
-
-	// Selection tools --------------------------------------
-	enum class AppState {
-		SelectingSource, 
-		CloningOnTarget 
-	};
-
-	AppState appState = AppState::SelectingSource;
-
-	// Store the cloned source region
-	ofImage selectedRegion;
-	int selectionWidth = 0;
-	int selectionHeight = 0;
+	void				drawGui();
+	deque<float>		deltaTimeDeque;
+	float				lastTime;
 
 };

@@ -2,17 +2,14 @@
 #include "ofApp.h"
 
 //========================================================================
-int main(int argc, char ** argv) {
+int main( ){
 	ofGLWindowSettings settings;
-	settings.setGLVersion(3, 2);
+	settings.setGLVersion(3,2);
+	settings.setSize(1600, 900);
 
 	auto window = ofCreateWindow(settings);
 
-	
-	auto app = std::make_shared<ofApp>();
-	/*app->argc = argc;
-	app->argv = argv;*/
-
-	ofRunApp(window, app);
+	ofRunApp(window, std::make_shared<ofApp>());
 	ofRunMainLoop();
+
 }

@@ -2,350 +2,348 @@
 
 //--------------------------------------------------------------
 void ofApp::setup() {
-	ofDisableArbTex();
-	ofEnableAlphaBlending();
+	ofSetVerticalSync(true);
+	ofSetLogLevel(OF_LOG_NOTICE);
 
-	// Get image to filter
-	if (!sourceImage.load(argv[1])) {
-		ofLogError() << "Failed to load source image";
-		return;
+	densityWidth = 1600;
+	densityHeight = 900;
+	simulationWidth = densityWidth / 2;
+	simulationHeight = densityHeight / 2;
+	windowWidth = ofGetWindowWidth();
+	windowHeight = ofGetWindowHeight();
+
+	// Velocity and Density Fbo
+	velocityFbo.allocate(simulationWidth, simulationHeight, GL_RG32F);
+	densityFbo.allocate(simulationWidth, simulationHeight, GL_RGBA32F);
+
+	ftUtil::zero(velocityFbo);
+
+	fluidFlow.setup(simulationWidth, simulationHeight, densityWidth, densityHeight);
+
+	// Fluid dissapation setting
+	fluidFlow.setDissipationVel(0.05f); // velocity slowly settles
+	fluidFlow.setDissipationDen(0.0f);  // Density never fades
+	fluidFlow.setDissipationTmp(0.0f);
+
+	fluidFlow.setViscosityVel(0.4f);
+	fluidFlow.setViscosityDen(0.2f);
+
+	fluidFlow.setVorticity(0.15f);
+
+	fluidFlow.setBuoyancyWeight(0.0f);   // no rising smoke effect
+	fluidFlow.setBuoyancySigma(0.0f);
+	fluidFlow.setBuoyancyAmbientTemperature(0.0f);
+
+	// Initiall fluid layout
+	densityFbo.begin();
+	ofClear(255, 255, 255, 255);
+
+	for (int i = 0; i < 600; i++) {
+		float x = ofRandom(densityWidth);
+		float y = ofRandom(densityHeight);
+
+		ofSetColor(
+			60 + ofRandom(60),
+			80 + ofRandom(80),
+			150 + ofRandom(80)
+		);
+
+		ofDrawEllipse(x, y,
+			ofRandom(20, 120),
+			ofRandom(10, 60));
 	}
-	if (!targetImage.load(argv[2])) {
-		ofLogError() << "Failed to load target image";
-		return;
-	}
+	densityFbo.end();
 
-	// Shrink image if too large
-	int maxDim = 2048;
-	float scaleSource = glm::min(1.0f, float(maxDim) / glm::max(sourceImage.getWidth(), sourceImage.getHeight()));
-	float scaleTarget = glm::min(1.0f, float(maxDim) / glm::max(targetImage.getWidth(), targetImage.getHeight()));
-	if (scaleSource < 1.0f)
-		sourceImage.resize(sourceImage.getWidth() * scaleSource, sourceImage.getHeight() * scaleSource);
-	if (scaleTarget < 1.0f)
-		targetImage.resize(targetImage.getWidth() * scaleTarget, targetImage.getHeight() * scaleTarget);
+	fluidFlow.addDensity(densityFbo.getTexture());
 
-	// Set window size
-	w = std::max(sourceImage.getWidth(), targetImage.getWidth());
-	h = std::max(sourceImage.getHeight(), targetImage.getHeight());
+	// Reset all flows together and modular processing
+	flows.push_back(&fluidFlow);
 
-	ofSetWindowShape(w, h);
-	 
-	// Initialize mask
-	mask.resize(w * h, false);
+	flowToolsLogo.load("flowtools.png");
+	fluidFlow.addObstacle(flowToolsLogo.getTexture());
+
+	lastTime = ofGetElapsedTimef();
+
+	setupGui();
 }
+
+void ofApp::setupGui() {
+
+	gui.setup("settings");
+	gui.setDefaultBackgroundColor(ofColor(0, 0, 0, 127));
+	gui.setDefaultFillColor(ofColor(160, 160, 160, 160));
+	gui.add(guiFPS.set("average FPS", 0, 0, 60));
+	gui.add(guiMinFPS.set("minimum FPS", 0, 0, 60));
+	gui.add(toggleFullScreen.set("fullscreen (F)", false));
+	toggleFullScreen.addListener(this, &ofApp::toggleFullScreenListener);
+	gui.add(toggleGuiDraw.set("show gui (G)", true));
+	gui.add(toggleReset.set("reset (R)", false));
+	toggleReset.addListener(this, &ofApp::toggleResetListener);
+	gui.add(outputWidth.set("output width", 1280, 256, 1920));
+	gui.add(outputHeight.set("output height", 720, 144, 1080));
+	gui.add(simulationScale.set("simulation scale", 2, 1, 4));
+	gui.add(simulationFPS.set("simulation fps", 60, 1, 60));
+	outputWidth.addListener(this, &ofApp::simulationResolutionListener);
+	outputHeight.addListener(this, &ofApp::simulationResolutionListener);
+	simulationScale.addListener(this, &ofApp::simulationResolutionListener);
+
+
+	visualizationParameters.setName("visualization");
+	visualizationParameters.add(visualizationName.set("name", "fluidFlow Density"));
+	visualizationParameters.add(visualizationMode.set("mode", FLUID_DEN, OBSTACLE, FLUID_DEN));
+	visualizationParameters.add(visualizationScale.set("scale", 1, 0.1, 10.0));
+	visualizationParameters.add(toggleVisualizationScalar.set("show scalar", false));
+	visualizationMode.addListener(this, &ofApp::visualizationModeListener);
+	toggleVisualizationScalar.addListener(this, &ofApp::toggleVisualizationScalarListener);
+	visualizationScale.addListener(this, &ofApp::visualizationScaleListener);
+
+	gui.add(visualizationParameters);
+	for (auto flow : flows) {
+		gui.add(flow->getParameters());
+	}
+
+	if (!ofFile("settings.xml")) { gui.saveToFile("settings.xml"); }
+	gui.loadFromFile("settings.xml");
+
+	gui.minimizeAll();
+	toggleGuiDraw = true;
+}
+
 
 //--------------------------------------------------------------
 void ofApp::update() {
+	float t = ofGetElapsedTimef();
+	float dt = 1.0f / max(ofGetFrameRate(), 1.0f);
+
+	// Accumulate Time
+	pigmentTimer += dt;
+	velocityTimer += dt;
+
+	// Clear both framebuffers
+	ftUtil::zero(velocityFbo);
+
+	
+	while (velocityTimer >= velocityInterval) {
+		velocityTimer -= velocityInterval;
+		injectVelocity();
+	}
+
+	fluidFlow.addVelocity(velocityFbo.getTexture(), 1.0f);
+
+	while (pigmentTimer >= pigmentInterval) {
+		pigmentTimer -= pigmentInterval;
+		injectDensity();
+	}
+
+	// Freeze the final texture
+	if (ofGetElapsedTimef() > 15.0f) {
+		fluidFlow.setDissipationVel(1.0f);
+		fluidFlow.setViscosityVel(1.0f);
+	}
+
+	fluidFlow.update(dt);
 }
 
 //--------------------------------------------------------------
 void ofApp::draw() {
-	if (appState == AppState::SelectingSource) {
-		sourceImage.draw(0, 0);
+	ofClear(0, 0);
 
-		// Brush strokes
-		ofSetColor(255, 0, 0, 50);
+	ofPushStyle();
 
-		for (int y = 0; y < h; y++) {
-			for (int x = 0; x < w; x++) {
-				if (mask[y * w + x]) {
-					ofDrawRectangle(x, y, 1, 1);
-				}
-			}
-		}
+	ofEnableBlendMode(OF_BLENDMODE_ALPHA);
+	switch (visualizationMode.get()) {
+	case OBSTACLE:		fluidFlow.drawObstacle(0, 0, windowWidth, windowHeight); break;
+	case OBST_OFFSET:	fluidFlow.drawObstacleOffset(0, 0, windowWidth, windowHeight); break;
+	case FLUID_BUOY:	fluidFlow.drawBuoyancy(0, 0, windowWidth, windowHeight); break;
+	case FLUID_VORT:	fluidFlow.drawVorticity(0, 0, windowWidth, windowHeight); break;
+	case FLUID_DIVE:	fluidFlow.drawDivergence(0, 0, windowWidth, windowHeight); break;
+	case FLUID_TMP:		fluidFlow.drawTemperature(0, 0, windowWidth, windowHeight); break;
+	case FLUID_PRS:		fluidFlow.drawPressure(0, 0, windowWidth, windowHeight); break;
+	case FLUID_VEL:		fluidFlow.drawVelocity(0, 0, windowWidth, windowHeight); break;
+	case FLUID_DEN:		fluidFlow.draw(0, 0, windowWidth, windowHeight); break;
+	default: break;
+	}
 
-		ofNoFill();
-		ofSetColor(255);
-		ofDrawCircle(ofGetMouseX(), ofGetMouseY(), brushRadius);
 
-	} else if (appState == AppState::CloningOnTarget) {
-		targetImage.draw(0, 0);
+	// ===== STEP 6: STYLIZATION PASS =====
+	ofEnableBlendMode(OF_BLENDMODE_MULTIPLY);
+	ofSetColor(100, 120, 180, 80);
+	ofDrawRectangle(0, 0, windowWidth, windowHeight);
 
-		// Target box
-		ofNoFill();
-		ofSetColor(0, 255, 0);
+	// Optional highlight pass
+	ofEnableBlendMode(OF_BLENDMODE_ADD);
+	ofSetColor(20, 30, 50, 40);
+	ofDrawRectangle(0, 0, windowWidth, windowHeight);
 
-		ofDrawRectangle(
-			mouseXPreview,
-			mouseYPreview,
-			selectionWidth,
-			selectionHeight
-		);
+	if (toggleGuiDraw) {
+		ofEnableBlendMode(OF_BLENDMODE_ALPHA);
+		drawGui();
+	}
+	ofPopStyle();
+}
 
-		ofSetColor(255);
+void ofApp::drawGui() {
+	guiFPS = (int)(ofGetFrameRate() + 0.5);
+
+	// calculate minimum fps
+	float deltaTime = ofGetElapsedTimef() - lastTime;
+	lastTime = ofGetElapsedTimef();
+	deltaTimeDeque.push_back(deltaTime);
+
+	while (deltaTimeDeque.size() > guiFPS.get())
+		deltaTimeDeque.pop_front();
+
+	float longestTime = 0;
+	for (int i = 0; i < (int)deltaTimeDeque.size(); i++) {
+		if (deltaTimeDeque[i] > longestTime)
+			longestTime = deltaTimeDeque[i];
+	}
+
+	guiMinFPS.set(1.0 / longestTime);
+
+	ofPushStyle();
+	ofEnableBlendMode(OF_BLENDMODE_ALPHA);
+	gui.draw();
+	ofPopStyle();
+}
+
+
+//--------------------------------------------------------------
+void ofApp::keyPressed(int key) {
+	switch (key) {
+	default: break;
+	case '6': visualizationMode.set(FLUID_VORT); break;
+	case '7': visualizationMode.set(FLUID_TMP); break;
+	case '8': visualizationMode.set(FLUID_PRS); break;
+	case '9': visualizationMode.set(FLUID_VEL); break;
+	case '0': visualizationMode.set(FLUID_DEN); break;
+	case 'G':toggleGuiDraw = !toggleGuiDraw; break;
+	case 'F': toggleFullScreen.set(!toggleFullScreen.get()); break;
+	case 'R': toggleReset.set(!toggleReset.get()); break;
 	}
 }
 
 //--------------------------------------------------------------
-void ofApp::saveOutput() {
-	if (!targetImage.save("output/output.png")) {
-		ofLogError() << "Failed to save image!";
-	} else {
-		ofLogNotice() << "Saved image to output/output.png";
-	}
+void ofApp::keyReleased(int key) {
+
 }
 
 //--------------------------------------------------------------
-void ofApp::mousePressed(int mouseX, int mouseY, int button) {
-	if (appState == AppState::SelectingSource) {
-		brushing = true;
-		brushMask(mouseX, mouseY);
-	}
+void ofApp::mouseMoved(int x, int y) {
+
 }
 
 //--------------------------------------------------------------
-void ofApp::mouseDragged(int mouseX, int mouseY, int button) {
-	if (brushing) {
-		brushMask(mouseX, mouseY);
-	}
+void ofApp::mouseDragged(int x, int y, int button) {
+
 }
 
 //--------------------------------------------------------------
-void ofApp::mouseMoved(int mouseX, int mouseY) {
-	mouseXPreview = mouseX;
-	mouseYPreview = mouseY;
+void ofApp::mousePressed(int x, int y, int button) {
+
 }
 
 //--------------------------------------------------------------
-void ofApp::mouseReleased(int mouseX, int mouseY, int button) {
-	if (appState == AppState::SelectingSource) {
+void ofApp::mouseReleased(int x, int y, int button) {
 
-		brushing = false;
-
-		// Obtain the corners of the bounding box of the selected region
-		int minX = w;
-		int minY = h;
-		int maxX = 0;
-		int maxY = 0;
-
-		for (int yy = 0; yy < h; yy++) {
-			for (int xx = 0; xx < w; xx++) {
-				if (mask[yy * w + xx]) {
-					minX = std::min(minX, xx);
-					maxX = std::max(maxX, xx);
-					minY = std::min(minY, yy);
-					maxY = std::max(maxY, yy);
-				}
-			}
-		}
-
-		selectionWidth = maxX - minX + 1;
-		selectionHeight = maxY - minY + 1;
-
-		// Crop the selected region from source
-		selectedRegion.allocate(selectionWidth, selectionHeight, OF_IMAGE_COLOR);
-		cloneMask.assign(selectionWidth * selectionHeight, false);
-
-		for (int yy = 0; yy < selectionHeight; yy++) {
-			for (int xx = 0; xx < selectionWidth; xx++) {
-
-				int sx = minX + xx;
-				int sy = minY + yy;
-
-				selectedRegion.setColor(xx, yy, sourceImage.getColor(sx, sy));
-
-				if (mask[sy * w + sx])
-					cloneMask[yy * selectionWidth + xx] = true;
-			}
-		}
-
-		selectedRegion.update();
-
-		// Switch to Cloning mode
-		appState = AppState::CloningOnTarget;
-		ofLogNotice() << "Source region selected. Click on target to paste.";
-
-	} else if (appState == AppState::CloningOnTarget) {
-		pasteX = mouseX;
-		pasteY = mouseY;
-
-		// Clear the mask and mark the region to clone based on position and cloneMask
-		mask.assign(w * h, false);
-
-		for (int yy = 0; yy < selectionHeight; yy++) {
-			for (int xx = 0; xx < selectionWidth; xx++) {
-
-				if (!cloneMask[yy * selectionWidth + xx])
-					continue;
-
-				int tx = pasteX + xx;
-				int ty = pasteY + yy;
-
-				if (tx >= 0 && tx < w && ty >= 0 && ty < h) {
-					mask[ty * w + tx] = true;
-				}
-			}
-		}
-
-		// Run seamless cloning
-		computeDivergenceSeamless(targetImage, selectedRegion);
-		solvePoissonSeamless(targetImage);
-
-		targetImage.update();
-		saveOutput();
-
-		ofLogNotice() << "Pasted source region onto target.";
-	}
 }
 
 //--------------------------------------------------------------
-void ofApp::brushMask(int mouseX, int mouseY) {
+void ofApp::mouseEntered(int x, int y) {
 
-	// Check a square around the mouse position, but only mark pixels within a radius. 
-	for (int dy = -brushRadius; dy <= brushRadius; dy++) {
-		for (int dx = -brushRadius; dx <= brushRadius; dx++) {
-			if (dx * dx + dy * dy > brushRadius * brushRadius)
-				continue;
-
-			int x = mouseX + dx;
-			int y = mouseY + dy;
-
-			if (x < 0 || x >= sourceImage.getWidth() || y < 0 || y >= sourceImage.getHeight())
-				continue;
-
-			mask[y * w + x] = true;
-		}
-	}
 }
 
 //--------------------------------------------------------------
-void ofApp::computeDivergenceSeamless(ofImage & targetImage, ofImage & sourceImage) {
-	ofPixels & target = targetImage.getPixels();
-	ofPixels & source = sourceImage.getPixels();
+void ofApp::mouseExited(int x, int y) {
 
-	// Assign indexes to masked pixels
-	indexMap.resize(w * h, -1);
-	int maskedPixels = 0;
-	for (int yy = 0; yy < h; yy++) {
-		for (int xx = 0; xx < w; xx++) {
-			if (mask[yy * w + xx]) {
-				indexMap[yy * w + xx] = maskedPixels++;
-			}
-		}
-	}
-
-	// Compute and store divergence of the gradient for masked pixels
-	pixelsR.assign(maskedPixels, 0.0);
-	pixelsG.assign(maskedPixels, 0.0);
-	pixelsB.assign(maskedPixels, 0.0);
-
-	for (int yy = 0; yy < h; yy++) {
-		for (int xx = 0; xx < w; xx++) {
-
-			// Skip non-masked pixels
-			int i = indexMap[yy * w + xx];
-			if (i == -1)
-				continue;
-
-			// Switch from target to clone coordinates
-			int cloneX = xx - pasteX;
-			int cloneY = yy - pasteY;
-
-			if (cloneX < 0 || cloneX >= selectionWidth || cloneY < 0 || cloneY >= selectionHeight)
-				continue;
-
-			// Gather neighboring pixel colors
-			ofColor cCenter = source.getColor(cloneX, cloneY);
-
-			int cLeft = std::max(cloneX - 1, 0);
-			int cRight = std::min(cloneX + 1, selectionWidth - 1);
-			int cUp = std::max(cloneY - 1, 0);
-			int cDown = std::min(cloneY + 1, selectionHeight - 1);
-
-			ofColor colorLeft = source.getColor(cLeft, cloneY);
-			ofColor colorRight = source.getColor(cRight, cloneY);
-			ofColor colorUp = source.getColor(cloneX, cUp);
-			ofColor colorDown = source.getColor(cloneX, cDown);
-
-			// Divergence of the gradient 
-			pixelsR[i] = 1.0 * (4.0 * cCenter.r - (colorLeft.r + colorRight.r + colorUp.r + colorDown.r));
-			pixelsG[i] = 1.0 * (4.0 * cCenter.g - (colorLeft.g + colorRight.g + colorUp.g + colorDown.g));
-			pixelsB[i] = 1.0 * (4.0 * cCenter.b - (colorLeft.b + colorRight.b + colorUp.b + colorDown.b));
-		}
-	}
 }
 
 //--------------------------------------------------------------
-void ofApp::solvePoissonSeamless(ofImage & targetImage) {
-	ofPixels & target = targetImage.getPixels();
-	int N = pixelsR.size();
-	if (N == 0)
-		return;
+void ofApp::windowResized(int w, int h) {
 
-	triplets.clear();
-	bR.resize(N);
-	bG.resize(N);
-	bB.resize(N);
+}
 
-	for (int i = 0; i < N; i++) {
-		bR[i] = pixelsR[i];
-		bG[i] = pixelsG[i];
-		bB[i] = pixelsB[i];
+//--------------------------------------------------------------
+void ofApp::gotMessage(ofMessage msg) {
+
+}
+
+//--------------------------------------------------------------
+void ofApp::dragEvent(ofDragInfo dragInfo) {
+
+}
+
+//--------------------------------------------------------------
+
+
+//--------------------------------------------------------------
+void ofApp::toggleResetListener(bool& _value) {
+	if (_value) {
+		for (auto flow : flows) { flow->reset(); }
+		fluidFlow.addObstacle(flowToolsLogo.getTexture());
+	}
+	_value = false;
+}
+
+void ofApp::simulationResolutionListener(int& _value) {
+	densityWidth = outputWidth;
+	densityHeight = outputHeight;
+	simulationWidth = densityWidth / simulationScale;
+	simulationHeight = densityHeight / simulationScale;
+
+	fluidFlow.resize(simulationWidth, simulationHeight, densityWidth, densityHeight);
+	fluidFlow.addObstacle(flowToolsLogo.getTexture());
+}
+
+void ofApp::injectVelocity() {
+	velocityFbo.begin();
+
+	// IMPORTANT: zero velocity = black
+	ofClear(0, 0, 0, 255);
+
+	ofEnableBlendMode(OF_BLENDMODE_ADD);
+
+	float t = ofGetElapsedTimef();
+
+	float cx = simulationWidth * 0.5f;
+	float cy = simulationHeight * 0.5f;
+
+	for (int i = 0; i < 20; i++) {
+
+		float angle = ofRandom(TWO_PI);
+		float radius = ofRandom(simulationWidth * 0.3f);
+
+		float x = cx + cos(angle) * radius;
+		float y = cy + sin(angle) * radius;
+
+		// Tangential swirl direction
+		float vx = -sin(angle) * 5.0f;
+		float vy = cos(angle) * 5.0f;
+
+		ofSetColor(ofFloatColor(vx, vy, 0.0, 1.0));
+		ofDrawCircle(x, y, 10);
 	}
 
-	// Build sparse matrix A
-	for (int yy = 0; yy < h; yy++) {
-		for (int xx = 0; xx < w; xx++) {
-			int i = indexMap[yy * w + xx];
-			if (i == -1)
-				continue;
+	velocityFbo.end();
+}
 
-			int count = 0;
-			int neighbors[4][2] = { { xx - 1, yy }, { xx + 1, yy }, { xx, yy - 1 }, { xx, yy + 1 } };
+void ofApp::injectDensity() {
+	ftUtil::zero(densityFbo);
 
-			// Discard neighbors outside the image
-			for (auto & n : neighbors) {
-				int nx = n[0];
-				int ny = n[1];
-				if (nx < 0 || nx >= w || ny < 0 || ny >= h)
-					continue;
+	densityFbo.begin();
+	ofEnableBlendMode(OF_BLENDMODE_ADD);
 
-				// Place a -1 in A for each neighbor pixel in the mask, and add the neighbor's color to the RHS if outside the mask
-				int j = indexMap[ny * w + nx];
-				if (j != -1) {
-					triplets.push_back(T(i, j, -1)); 
-					count++;
+	float x = ofRandom(simulationWidth);
+	float y = ofRandom(simulationHeight);
 
-				} else {
-					ofColor c = target.getColor(nx, ny);
-					bR[i] += c.r;
-					bG[i] += c.g;
-					bB[i] += c.b;
-					count++;
-				}
-			}
+	ofSetColor(
+		80 + ofRandom(80),
+		120 + ofRandom(80),
+		200 + ofRandom(40)
+	);
 
-			triplets.push_back(T(i, i, count));
-		}
-	}
+	ofDrawCircle(x, y, ofRandom(20, 60));
+	densityFbo.end();
 
-	A.resize(N, N);
-	A.setFromTriplets(triplets.begin(), triplets.end());
-
-	// Solve linear system
-	Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
-	solver.analyzePattern(A);
-	solver.factorize(A);
-
-	Eigen::VectorXd xR = solver.solve(bR);
-	Eigen::VectorXd xG = solver.solve(bG);
-	Eigen::VectorXd xB = solver.solve(bB);
-
-	// Copy solution into target image
-	for (int yy = 0; yy < h; yy++) {
-		for (int xx = 0; xx < w; xx++) {
-			int i = indexMap[yy * w + xx];
-			if (i == -1)
-				continue;
-
-			ofColor c;
-			c.r = glm::clamp((int)round(xR[i]), 0, 255);
-			c.g = glm::clamp((int)round(xG[i]), 0, 255);
-			c.b = glm::clamp((int)round(xB[i]), 0, 255);
-			target.setColor(xx, yy, c);
-		}
-	}
-
-	targetImage.update(); 
-	ofLogNotice() << "Poisson solve finished";
+	fluidFlow.addDensity(densityFbo.getTexture(), 0.2f);
 }
