@@ -21,14 +21,14 @@ void ofApp::setup() {
 	fluidFlow.setup(simulationWidth, simulationHeight, densityWidth, densityHeight);
 
 	// Fluid dissapation setting
-	fluidFlow.setDissipationVel(0.02f); // velocity slowly settles
+	fluidFlow.setDissipationVel(0.05f); // velocity slowly settles
 	fluidFlow.setDissipationDen(0.0f);  // Density never fades
 	fluidFlow.setDissipationTmp(0.0f);
 
-	fluidFlow.setViscosityVel(0.06f);
-	fluidFlow.setViscosityDen(0.02f);
+	fluidFlow.setViscosityVel(0.4f);
+	fluidFlow.setViscosityDen(0.2f);
 
-	fluidFlow.setVorticity(0.55f);
+	fluidFlow.setVorticity(0.15f);
 
 	fluidFlow.setBuoyancyWeight(0.0f);   // no rising smoke effect
 	fluidFlow.setBuoyancySigma(0.0f);
@@ -43,9 +43,9 @@ void ofApp::setup() {
 		float y = ofRandom(densityHeight);
 
 		ofSetColor(
-			ofRandom(255),
-			ofRandom(255),
-			ofRandom(255)
+			60 + ofRandom(60),
+			80 + ofRandom(80),
+			150 + ofRandom(80)
 		);
 
 		ofDrawEllipse(x, y,
@@ -125,7 +125,7 @@ void ofApp::update() {
 	
 	while (velocityTimer >= velocityInterval) {
 		velocityTimer -= velocityInterval;
-		injectCurlVelocity();
+		injectVelocity();
 	}
 
 	fluidFlow.addVelocity(velocityFbo.getTexture(), 1.0f);
@@ -297,59 +297,31 @@ void ofApp::simulationResolutionListener(int& _value) {
 
 void ofApp::injectVelocity() {
 	velocityFbo.begin();
+
+	// IMPORTANT: zero velocity = black
 	ofClear(0, 0, 0, 255);
+
 	ofEnableBlendMode(OF_BLENDMODE_ADD);
 
 	float t = ofGetElapsedTimef();
+
+	float cx = simulationWidth * 0.5f;
+	float cy = simulationHeight * 0.5f;
 
 	for (int i = 0; i < 20; i++) {
-		float x = ofRandom(simulationWidth);
-		float y = ofRandom(simulationHeight);
 
-		float angle = ofNoise(x * 0.01f, y * 0.01f, t * 0.2f) * TWO_PI;
-		float strength = 4.0f;
+		float angle = ofRandom(TWO_PI);
+		float radius = ofRandom(simulationWidth * 0.3f);
 
-		float vx = cos(angle) * strength;
-		float vy = sin(angle) * strength;
+		float x = cx + cos(angle) * radius;
+		float y = cy + sin(angle) * radius;
 
-		ofSetColor(ofFloatColor(vx, vy, 0, 1));
-		ofDrawCircle(x, y, 15);
-	}
+		// Tangential swirl direction
+		float vx = -sin(angle) * 5.0f;
+		float vy = cos(angle) * 5.0f;
 
-	velocityFbo.end();
-}
-
-void ofApp::injectCurlVelocity() {
-	velocityFbo.begin();
-	ofClear(0, 0, 0, 255);
-	ofEnableBlendMode(OF_BLENDMODE_ADD);
-
-	float t = ofGetElapsedTimef();
-
-	float eps = 1.0f;      // finite difference step
-	float scale = 0.004f;   // noise frequency
-	float strength = 18.0f;
-
-	for (int i = 0; i < 150; i++) {
-		float x = ofRandom(simulationWidth);
-		float y = ofRandom(simulationHeight);
-
-		// scalar noise field
-		float nL = ofNoise((x - eps) * scale, y * scale, t * 0.15f);
-		float nR = ofNoise((x + eps) * scale, y * scale, t * 0.15f);
-		float nD = ofNoise(x * scale, (y - eps) * scale, t * 0.15f);
-		float nU = ofNoise(x * scale, (y + eps) * scale, t * 0.15f);
-
-		// numerical derivatives
-		float dNdx = (nR - nL) / (2.0f * eps);
-		float dNdy = (nU - nD) / (2.0f * eps);
-
-		// TRUE CURL NOISE
-		float vx = dNdy * strength;
-		float vy = -dNdx * strength;
-
-		ofSetColor(ofFloatColor(vx, vy, 0, 1));
-		ofDrawCircle(x, y, 12);
+		ofSetColor(ofFloatColor(vx, vy, 0.0, 1.0));
+		ofDrawCircle(x, y, 10);
 	}
 
 	velocityFbo.end();
