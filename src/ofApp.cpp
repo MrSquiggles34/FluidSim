@@ -21,12 +21,12 @@ void ofApp::setup() {
 	fluidFlow.setup(simulationWidth, simulationHeight, densityWidth, densityHeight);
 
 	// Fluid dissapation setting
-	fluidFlow.setDissipationVel(0.02f); // velocity slowly settles
+	fluidFlow.setDissipationVel(0.2f); // velocity slowly settles
 	fluidFlow.setDissipationDen(0.0f);  // Density never fades
 	fluidFlow.setDissipationTmp(0.0f);
 
-	fluidFlow.setViscosityVel(0.06f);
-	fluidFlow.setViscosityDen(0.02f);
+	fluidFlow.setViscosityVel(0.08f);
+	fluidFlow.setViscosityDen(0.03f);
 
 	fluidFlow.setVorticity(0.55f);
 
@@ -59,8 +59,12 @@ void ofApp::setup() {
 	// Reset all flows together and modular processing
 	flows.push_back(&fluidFlow);
 
-	flowToolsLogo.load("flowtools.png");
-	fluidFlow.addObstacle(flowToolsLogo.getTexture());
+	bool loaded = flowToolsLogo.load("bird.jpg");
+	cout << "loaded: " << loaded << endl;
+
+	if (loaded) {
+		fluidFlow.addObstacle(flowToolsLogo.getTexture());
+	}
 
 	lastTime = ofGetElapsedTimef();
 
@@ -101,9 +105,6 @@ void ofApp::setupGui() {
 	for (auto flow : flows) {
 		gui.add(flow->getParameters());
 	}
-
-	if (!ofFile("settings.xml")) { gui.saveToFile("settings.xml"); }
-	gui.loadFromFile("settings.xml");
 
 	gui.minimizeAll();
 	toggleGuiDraw = true;

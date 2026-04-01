@@ -45,6 +45,7 @@ public:
 
 	ofFbo velocityFbo;
 	ofFbo densityFbo;
+	ofFbo freezeMaskFbo;
 
 
 	// Store fluid pipeline into flows
@@ -56,7 +57,7 @@ public:
 
 	// Inserting Density
 	float pigmentTimer = 0.0f;
-	float pigmentInterval = 15.0f;   
+	float pigmentInterval = 30.0f;   
 
 	// Inserting Velocity
 	float velocityTimer = 0;
@@ -65,6 +66,7 @@ public:
 	void injectVelocity();
 	void injectDensity();
 	void injectCurlVelocity();
+	void updateFreezeMask();
 
 	ofParameter<int>		outputWidth;
 	ofParameter<int>		outputHeight;
